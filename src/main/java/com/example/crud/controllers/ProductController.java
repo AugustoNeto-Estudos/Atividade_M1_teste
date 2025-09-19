@@ -5,6 +5,7 @@ import com.example.crud.domain.product.ProductRepository;
 import com.example.crud.domain.category.RequestCategory;
 import com.example.crud.domain.product.RequestProduct;
 import com.example.crud.service.AddressSearch;
+import com.example.crud.service.ViaCepService;
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -13,74 +14,66 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.text.Normalizer;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/product")
 public class ProductController {
+
     @Autowired
     private ProductRepository repository;
-    private final AddressSearch addressSearch;
 
     @Autowired
-    public ProductController(ProductRepository repository, AddressSearch addressSearch) {
-        this.repository = repository;
-        this.addressSearch = addressSearch;
-    }
+    private AddressSearch addressSearch;
+
+    @Autowired
+    private ViaCepService viaCepService;
 
     @GetMapping
-    public ResponseEntity getAllProducts(){
+    public ResponseEntity getAllProducts() {
         var allProducts = repository.findAllByActiveTrue();
         return ResponseEntity.ok(allProducts);
     }
 
     @GetMapping("/cep")
-    public ResponseEntity verifyAvailability(@RequestParam String state, @RequestParam String city, @RequestParam String street){
+    public ResponseEntity verifyAvailability(@RequestParam String state, @RequestParam String city, @RequestParam String street) {
         String cep = addressSearch.searchAddress(state, city, street);
         return ResponseEntity.ok(cep);
     }
 
-    @GetMapping("/endpoint1") //products from only one category
-    public ResponseEntity getAllProducts1(@RequestParam String categoryAsParam){
+    @GetMapping("/endpoint1")
+    public ResponseEntity getAllProducts1(@RequestParam String categoryAsParam) {
         var allProducts = repository.findAllByCategory(categoryAsParam);
         return ResponseEntity.ok(allProducts);
     }
 
-    @GetMapping("/endpoint2/{id}") //only one product
-    public ResponseEntity getProduct(@PathVariable String id){
+    @GetMapping("/endpoint2/{id}")
+    public ResponseEntity getProduct(@PathVariable String id) {
         Optional<Product> optionalProduct = repository.findById(id);
         return ResponseEntity.ok(optionalProduct);
     }
 
-    @GetMapping("/endpoint3/top5byprice") // top 5 product by price
-    public ResponseEntity getAllProducts3(){
+    @GetMapping("/endpoint3/top5byprice")
+    public ResponseEntity getAllProducts3() {
         var allProducts = repository.findAllByActiveTrue();
-
-        List<Product> topFive = allProducts
-                .stream()
+        List<Product> topFive = allProducts.stream()
                 .sorted(Comparator.comparingInt(Product::getPrice).reversed())
                 .limit(5)
                 .collect(Collectors.toList());
-
         return ResponseEntity.ok(topFive);
     }
 
-    @GetMapping("/category/{categoryAsPath}") //all REST Components
+    @GetMapping("/category/{categoryAsPath}")
     public ResponseEntity getProductsByCategory(
             @RequestHeader String categoryAsHeader,
             @PathVariable String categoryAsPath,
             @RequestBody @Valid RequestCategory categoryAsBody,
             @RequestParam String categoryAsParam
-    ){
+    ) {
         var allProducts = repository.findAllByActiveTrue();
         List<Product> filteredProducts = new ArrayList<>();
-
-        for (int i = 0; i < allProducts.size(); i++) {
-            Product product = allProducts.get(i);
+        for (Product product : allProducts) {
             if (categoryAsParam.equals(product.getCategory())) {
                 filteredProducts.add(product);
             }
@@ -89,7 +82,7 @@ public class ProductController {
     }
 
     @PostMapping
-    public ResponseEntity registerProduct(@RequestBody @Valid RequestProduct data){
+    public ResponseEntity registerProduct(@RequestBody @Valid RequestProduct data) {
         Product newProduct = new Product(data);
         repository.save(newProduct);
         return ResponseEntity.ok().build();
@@ -97,7 +90,7 @@ public class ProductController {
 
     @PutMapping
     @Transactional
-    public ResponseEntity updateProduct(@RequestBody @Valid RequestProduct data){
+    public ResponseEntity updateProduct(@RequestBody @Valid RequestProduct data) {
         Optional<Product> optionalProduct = repository.findById(data.id());
         if (optionalProduct.isPresent()) {
             Product product = optionalProduct.get();
@@ -111,7 +104,7 @@ public class ProductController {
 
     @DeleteMapping("/{id}")
     @Transactional
-    public ResponseEntity deleteProduct(@PathVariable String id){
+    public ResponseEntity deleteProduct(@PathVariable String id) {
         Optional<Product> optionalProduct = repository.findById(id);
         if (optionalProduct.isPresent()) {
             Product product = optionalProduct.get();
@@ -122,19 +115,35 @@ public class ProductController {
         }
     }
 
-    // Novo endpoint que receba CEP e ID (do produto) como Parametros - #4
-    @GetMapping("/{id}/distribution-center")
-    public ResponseEntity<String> getDistributionCenterByCep(
+    // ✅ Novo endpoint com integração ViaCepService e retorna cidade
+    @GetMapping("/cep/localidade")
+    public ResponseEntity<String> getLocalidadeByCep(@RequestParam String cep) {
+        String cidade = viaCepService.buscarCidadePorCep(cep);
+        return ResponseEntity.ok(cidade);
+    }
+    // URL no postman: http://localhost:8080/product/cep/localidade?cep=08773380
+
+    private String normaliza(String valor) {
+        if (valor == null) return "";
+        return Normalizer.normalize(valor, Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "")
+                .toLowerCase()
+                .trim();
+    }
+
+    //O endpoint chama o metodo da service - #5
+    @GetMapping("/{id}/check-distribution")
+    public ResponseEntity<Boolean> checkDistributionMatch(
             @PathVariable("id") String productId,
             @RequestParam("cep") String cep) {
 
-        // 1. Busca o produto no banco
         Product product = repository.findById(productId)
                 .orElseThrow(() -> new EntityNotFoundException("Produto não encontrado: " + productId));
 
-        // 3. Retorna apenas o distribution_center do produto
-        return ResponseEntity.ok(product.getDistributionCenter());
+        boolean match = viaCepService.isCepMatchingDistributionCenter(cep, product.getDistributionCenter());
+        return ResponseEntity.ok(match);
+        // Exemplo de url no postman: http://localhost:8080/product/p1/check-distribution?cep=08773380
+        // Request criada e testada - #7
     }
-    // Exemplo de url no postman: http://localhost:8080/product/p1/distribution-center?cep=08773380
-}
 
+}
